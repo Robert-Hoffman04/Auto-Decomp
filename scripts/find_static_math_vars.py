@@ -15,7 +15,10 @@ FP_LOAD_RE = re.compile(
     r"\b(?:lfs|lfd)\s+f\d+\s*,\s*([A-Za-z_.$][\w.$]*)(?:@\w+)?(?:\(r\d+\))?"
 )
 LABEL_RE = re.compile(r"^\s*([A-Za-z_.$][\w.$]*):")
+OBJ_RE = re.compile(r"^\s*\.obj\s+([A-Za-z_.$][\w.$]*)\s*,")
+ENDOBJ_RE = re.compile(r"^\s*\.endobj\b")
 SECTION_RE = re.compile(r"^\s*\.section\s+([^,\s]+)")
+SECTION_COMMENT_RE = re.compile(r"^\s*#\s*(\.[A-Za-z0-9_.$]+):")
 
 FLOAT_RE = re.compile(r"^\s*\.float\s+([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)")
 DOUBLE_RE = re.compile(r"^\s*\.double\s+([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)")
@@ -102,9 +105,24 @@ def discover_constant_defs(paths: Iterable[Path]) -> Dict[str, ConstantInfo]:
                 current_label = None
                 continue
 
+            sec_comment = SECTION_COMMENT_RE.match(line)
+            if sec_comment:
+                section = sec_comment.group(1)
+                current_label = None
+                continue
+
             label = LABEL_RE.match(line)
             if label:
                 current_label = label.group(1)
+                continue
+
+            obj = OBJ_RE.match(line)
+            if obj:
+                current_label = obj.group(1)
+                continue
+
+            if ENDOBJ_RE.match(line):
+                current_label = None
                 continue
 
             if not current_label or section not in DATA_SECTIONS:
