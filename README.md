@@ -4,19 +4,21 @@ This repository is scaffolded from [`encounter/dtk-template`](https://github.com
 
 ## Quick start
 
-1. Configure the project for your game ID (e.g. `GLZE01`):
+1. Put your game image or extracted files in the template location:
+
+   ```text
+   orig/GAMEID
+   ```
+
+2. Configure the project for your game ID (e.g. `GLZE01`):
 
    ```bash
    scripts/setup_project.sh <GAMEID>
    ```
 
-2. Put your game image or extracted files in:
+   The setup script renames template paths and auto-populates as much config data as possible from files found in `orig/<GAMEID>` (DOL/REL hashes, modules list, and `build.sha1`).
 
-   ```text
-   orig/<GAMEID>
-   ```
-
-3. Edit:
+3. Review and adjust:
 
    ```text
    config/<GAMEID>/config.yml
