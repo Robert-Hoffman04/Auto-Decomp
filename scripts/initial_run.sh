@@ -23,10 +23,22 @@ if [[ ! -d "orig/$GAMEID" ]]; then
   exit 1
 fi
 
-echo "[1/2] Generating build files for $GAMEID"
+echo "[1/5] Generating build files for $GAMEID"
 python3 configure.py --version "$GAMEID"
 
-echo "[2/2] Running initial analysis/build"
+echo "[2/5] Running initial analysis/build"
+ninja
+
+echo "[3/5] Finding static mathematical variables and updating symbols.txt"
+python3 scripts/find_static_math_vars.py \
+  --asm-dir asm \
+  --output "build/$GAMEID/static_math_vars.txt" \
+  --symbols "config/$GAMEID/symbols.txt"
+
+echo "[4/5] Regenerating build files after symbol updates"
+python3 configure.py --version "$GAMEID"
+
+echo "[5/5] Re-running conversion/build"
 ninja
 
 echo "Done. Check generated files in config/$GAMEID and build/$GAMEID"
