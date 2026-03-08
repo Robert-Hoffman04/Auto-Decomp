@@ -9,7 +9,7 @@ import re
 import struct
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Set
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 FP_LOAD_RE = re.compile(
     r"\b(?:lfs|lfd)\s+f\d+\s*,\s*([A-Za-z_.$][\w.$]*)(?:@\w+)?(?:\(r\d+\))?"
@@ -29,6 +29,21 @@ SYMBOL_LINE_RE = re.compile(r"^\s*([A-Za-z_.$][\w.$]*)\s*=")
 ADDR_IN_NAME_RE = re.compile(r"(?:^|_)([0-9A-Fa-f]{6,16})$")
 
 DATA_SECTIONS = {".sdata2", ".rodata", ".rdata", ".lit4", ".lit8"}
+
+KNOWN_CONSTANTS: List[Tuple[str, float]] = [
+    ("pi", math.pi),
+    ("two_pi", math.tau),
+    ("half_pi", math.pi / 2.0),
+    ("quarter_pi", math.pi / 4.0),
+    ("e", math.e),
+    ("ln2", math.log(2.0)),
+    ("ln10", math.log(10.0)),
+    ("sqrt2", math.sqrt(2.0)),
+    ("sqrt3", math.sqrt(3.0)),
+    ("inv_sqrt2", 1.0 / math.sqrt(2.0)),
+    ("deg_to_rad", math.pi / 180.0),
+    ("rad_to_deg", 180.0 / math.pi),
+]
 
 
 @dataclass
@@ -70,6 +85,34 @@ def parse_addr_from_symbol_name(symbol: str) -> Optional[int]:
         return int(match.group(1), 16)
     except ValueError:
         return None
+
+
+def approx_equal(a: float, b: float) -> bool:
+    return math.isclose(a, b, rel_tol=1e-6, abs_tol=1e-9)
+
+
+def classify_human_name(value: float) -> Optional[str]:
+    for name, target in KNOWN_CONSTANTS:
+        if approx_equal(value, target):
+            return name
+
+    nearest_int = round(value)
+    if abs(value) <= 100000 and approx_equal(value, float(nearest_int)):
+        if nearest_int < 0:
+            return f"neg_{abs(nearest_int)}"
+        return f"int_{nearest_int}"
+
+    return None
+
+
+def suggest_human_symbol_name(symbol: str, info: ConstantInfo) -> Optional[str]:
+    base = classify_human_name(info.value)
+    if base is None:
+        return None
+
+    addr = parse_addr_from_symbol_name(symbol)
+    suffix = f"_{addr:X}" if addr is not None else ""
+    return f"static_{base}{suffix}"
 
 
 def discover_fp_refs(paths: Iterable[Path]) -> Set[str]:
@@ -189,8 +232,10 @@ def format_report(refs: Set[str], constants: Dict[str, ConstantInfo]) -> List[st
     ]
 
     for sym, info in matched:
+        suggested = suggest_human_symbol_name(sym, info)
+        suffix = f" | suggested_name: {suggested}" if suggested else ""
         lines.append(
-            f"{sym} = {info.value:.17g} [{info.kind}] ({info.section}) @ {info.source.as_posix()}"
+            f"{sym} = {info.value:.17g} [{info.kind}] ({info.section}) @ {info.source.as_posix()}{suffix}"
         )
 
     if not matched:
@@ -221,6 +266,7 @@ def build_symbol_line(name: str, info: ConstantInfo, addr: int) -> str:
 def apply_to_symbols(symbols_path: Path, refs: Set[str], constants: Dict[str, ConstantInfo]) -> int:
     existing = parse_existing_symbols(symbols_path)
     additions: List[str] = []
+    reserved_names = set(existing)
 
     for sym in sorted(refs):
         if sym in existing:
@@ -231,7 +277,15 @@ def apply_to_symbols(symbols_path: Path, refs: Set[str], constants: Dict[str, Co
         addr = parse_addr_from_symbol_name(sym)
         if addr is None:
             continue
-        additions.append(build_symbol_line(sym, info, addr))
+
+        name = sym
+        if sym.startswith("lbl_"):
+            suggested = suggest_human_symbol_name(sym, info)
+            if suggested and suggested not in reserved_names:
+                name = suggested
+
+        reserved_names.add(name)
+        additions.append(build_symbol_line(name, info, addr))
 
     if not additions:
         return 0
