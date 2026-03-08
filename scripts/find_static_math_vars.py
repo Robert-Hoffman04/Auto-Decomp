@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""Find static math constants in extracted assembly.
-
-This script scans assembly files to:
-1) discover symbols loaded by floating-point load instructions (lfs/lfd), and
-2) resolve those symbols to data definitions in .sdata2/.rodata-like sections.
-
-The output is a text report of candidate static mathematical variables.
-"""
+"""Find static math constants in extracted assembly and optionally apply them to symbols.txt."""
 
 from __future__ import annotations
 
@@ -29,13 +22,10 @@ DOUBLE_RE = re.compile(r"^\s*\.double\s+([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)")
 WORD_RE = re.compile(r"^\s*\.4byte\s+([^\s#]+)")
 DWORD_RE = re.compile(r"^\s*\.8byte\s+([^\s#]+)")
 
-DATA_SECTIONS = {
-    ".sdata2",
-    ".rodata",
-    ".rdata",
-    ".lit4",
-    ".lit8",
-}
+SYMBOL_LINE_RE = re.compile(r"^\s*([A-Za-z_.$][\w.$]*)\s*=")
+ADDR_IN_NAME_RE = re.compile(r"(?:^|_)([0-9A-Fa-f]{6,16})$")
+
+DATA_SECTIONS = {".sdata2", ".rodata", ".rdata", ".lit4", ".lit8"}
 
 
 @dataclass
@@ -67,6 +57,16 @@ def decode_f32(word: int) -> float:
 
 def decode_f64(dword: int) -> float:
     return struct.unpack(">d", struct.pack(">Q", dword & 0xFFFFFFFFFFFFFFFF))[0]
+
+
+def parse_addr_from_symbol_name(symbol: str) -> Optional[int]:
+    match = ADDR_IN_NAME_RE.search(symbol)
+    if not match:
+        return None
+    try:
+        return int(match.group(1), 16)
+    except ValueError:
+        return None
 
 
 def discover_fp_refs(paths: Iterable[Path]) -> Set[str]:
@@ -112,20 +112,18 @@ def discover_constant_defs(paths: Iterable[Path]) -> Dict[str, ConstantInfo]:
 
             f_match = FLOAT_RE.match(line)
             if f_match:
-                value = float(f_match.group(1))
                 constants.setdefault(
                     current_label,
-                    ConstantInfo(section=section, source=path, kind="float", value=value),
+                    ConstantInfo(section=section, source=path, kind="float", value=float(f_match.group(1))),
                 )
                 current_label = None
                 continue
 
             d_match = DOUBLE_RE.match(line)
             if d_match:
-                value = float(d_match.group(1))
                 constants.setdefault(
                     current_label,
-                    ConstantInfo(section=section, source=path, kind="double", value=value),
+                    ConstantInfo(section=section, source=path, kind="double", value=float(d_match.group(1))),
                 )
                 current_label = None
                 continue
@@ -138,12 +136,7 @@ def discover_constant_defs(paths: Iterable[Path]) -> Dict[str, ConstantInfo]:
                     if math.isfinite(value):
                         constants.setdefault(
                             current_label,
-                            ConstantInfo(
-                                section=section,
-                                source=path,
-                                kind="float(4byte)",
-                                value=value,
-                            ),
+                            ConstantInfo(section=section, source=path, kind="float(4byte)", value=value),
                         )
                         current_label = None
                 continue
@@ -156,12 +149,7 @@ def discover_constant_defs(paths: Iterable[Path]) -> Dict[str, ConstantInfo]:
                     if math.isfinite(value):
                         constants.setdefault(
                             current_label,
-                            ConstantInfo(
-                                section=section,
-                                source=path,
-                                kind="double(8byte)",
-                                value=value,
-                            ),
+                            ConstantInfo(section=section, source=path, kind="double(8byte)", value=value),
                         )
                         current_label = None
 
@@ -172,15 +160,15 @@ def format_report(refs: Set[str], constants: Dict[str, ConstantInfo]) -> List[st
     matched = []
     for sym in sorted(refs):
         info = constants.get(sym)
-        if info is None:
-            continue
-        matched.append((sym, info))
+        if info is not None:
+            matched.append((sym, info))
 
-    lines: List[str] = []
-    lines.append("# Static mathematical variable candidates")
-    lines.append(f"# referenced floating-point symbols: {len(refs)}")
-    lines.append(f"# resolved constants: {len(matched)}")
-    lines.append("")
+    lines: List[str] = [
+        "# Static mathematical variable candidates",
+        f"# referenced floating-point symbols: {len(refs)}",
+        f"# resolved constants: {len(matched)}",
+        "",
+    ]
 
     for sym, info in matched:
         lines.append(
@@ -193,15 +181,58 @@ def format_report(refs: Set[str], constants: Dict[str, ConstantInfo]) -> List[st
     return lines
 
 
+def parse_existing_symbols(symbols_path: Path) -> Set[str]:
+    if not symbols_path.exists():
+        return set()
+    names: Set[str] = set()
+    for line in symbols_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        m = SYMBOL_LINE_RE.match(line)
+        if m:
+            names.add(m.group(1))
+    return names
+
+
+def build_symbol_line(name: str, info: ConstantInfo, addr: int) -> str:
+    data_attr = "double" if "double" in info.kind else "float"
+    return (
+        f"{name} = {info.section}:0x{addr:X}; "
+        f"// type:object data:{data_attr} autogenerated:static_math_var"
+    )
+
+
+def apply_to_symbols(symbols_path: Path, refs: Set[str], constants: Dict[str, ConstantInfo]) -> int:
+    existing = parse_existing_symbols(symbols_path)
+    additions: List[str] = []
+
+    for sym in sorted(refs):
+        if sym in existing:
+            continue
+        info = constants.get(sym)
+        if info is None:
+            continue
+        addr = parse_addr_from_symbol_name(sym)
+        if addr is None:
+            continue
+        additions.append(build_symbol_line(sym, info, addr))
+
+    if not additions:
+        return 0
+
+    symbols_path.parent.mkdir(parents=True, exist_ok=True)
+    with symbols_path.open("a", encoding="utf-8") as f:
+        if symbols_path.stat().st_size > 0:
+            f.write("\n")
+        f.write("\n".join(additions))
+        f.write("\n")
+
+    return len(additions)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--asm-dir", type=Path, default=Path("asm"), help="Assembly root")
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=Path("build/static_math_vars.txt"),
-        help="Output report file",
-    )
+    parser.add_argument("--output", type=Path, default=Path("build/static_math_vars.txt"), help="Output report file")
+    parser.add_argument("--symbols", type=Path, help="If set, append discovered static math symbols to this symbols.txt")
     args = parser.parse_args()
 
     if not args.asm_dir.exists():
@@ -216,6 +247,11 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text("\n".join(report) + "\n", encoding="utf-8")
     print(f"Wrote {args.output} ({len(report)} lines)")
+
+    if args.symbols:
+        added = apply_to_symbols(args.symbols, refs, constants)
+        print(f"Updated {args.symbols}: added {added} symbol(s)")
+
     return 0
 
 
