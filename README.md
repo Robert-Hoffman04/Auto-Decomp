@@ -34,4 +34,5 @@ This repository is scaffolded from [`encounter/dtk-template`](https://github.com
 
 - `ninja` will download tool dependencies automatically via `tools/download_tool.py` when needed.
 - Use the generated `config/<GAMEID>/symbols.txt` and `config/<GAMEID>/splits.txt` as the basis for decomp progress.
+- The initial run now also generates `build/<GAMEID>/static_math_vars.txt` with floating-point static variable candidates found in extracted assembly.
 - For full configuration details, see the `docs/` directory from `dtk-template`.
