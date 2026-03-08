@@ -31,7 +31,7 @@ ninja
 
 echo "[3/5] Finding static mathematical variables and updating symbols.txt"
 python3 scripts/find_static_math_vars.py \
-  --asm-dir asm \
+  --asm-dir "build/$GAMEID/asm" \
   --output "build/$GAMEID/static_math_vars.txt" \
   --symbols "config/$GAMEID/symbols.txt"
 
